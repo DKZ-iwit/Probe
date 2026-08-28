@@ -4,7 +4,7 @@
    IndexedDB — all commercial data stays exclusively in ProbeDB (db.js).
    ========================================================================== */
 
-const CACHE_VERSION = "probe-cache-v1";
+const CACHE_VERSION = "probe-cache-v2"; // V1.1 refactor — bumped so installed users fetch new files
 
 const APP_SHELL = [
   "./",

@@ -1,4 +1,14 @@
-# PROBE — Discovery Intelligence
+# PROBE — Discovery Intelligence (V1.1)
+
+> **V1.1 — refactor UX & commercial intelligence.** Ce qui a changé par
+> rapport à la V1, en bref : saisie "New Discovery" radicalement simplifiée
+> (Entreprise + interlocuteurs + contexte facultatif, plus de formulaire à
+> tiroirs), interface principalement en français, un nouveau moteur **Win
+> Score** (force de la position commerciale de Colorz, distinct de
+> l'Opportunity Score) avec **Buying Committee**, et un écran Résultats à
+> deux niveaux ("En 30 secondes" puis "Voir l'analyse complète"). Détail
+> complet en fin de document, section **Journal des modifications (V1.1)**.
+
 
 Probe transforme un discovery call commercial en intelligence exploitable :
 **Comprendre → Qualifier → Évaluer → Détecter → Rebondir.**
@@ -178,6 +188,111 @@ simulation d'une réponse IA → import → vérification du Client Mapping, des
 scores, de l'Opportunity Radar (Migration → `DO_NOT_PUSH`, CRM → `PUSH`), du
 Colorz Match et du Callback → sauvegarde → rechargement simulé → persistance
 confirmée → export/import de backup.
+
+---
+
+## 9. Journal des modifications (V1.1)
+
+Refactor **ciblé** : aucune réécriture d'architecture. IndexedDB, la
+mécanique Probe → prompt → Claude/ChatGPT → JSON → Probe, GitHub Pages, et
+le référentiel Colorz existant sont conservés à l'identique.
+
+### Fichiers modifiés
+
+- `js/schema.js` — ajout de deux clés top-level **optionnelles** :
+  `buying_committee` (lecture structurée des interlocuteurs) et
+  `win_assessment` (Win Score). `REQUIRED_TOP_LEVEL_KEYS` **n'a pas changé** :
+  les analyses V1 sans ces clés restent valides à l'import.
+- `js/prompt-generator.js` — `formatContext()` réécrit pour le nouveau
+  contexte (entreprise, interlocuteurs multiples avec rôle déclaré, infos
+  commerciales facultatives) ; ajout des sections de règles Win Score
+  (raisonnement inspiré de MEDDPICC, jamais exposé comme tel) et Buying
+  Committee (ne jamais écraser un rôle déclaré) dans le prompt généré.
+- `js/app.js` — réécrit en profondeur : saisie "New Discovery" simplifiée
+  (interlocuteurs dynamiques, bloc "+ Infos commerciales" replié, antisèche
+  Discovery à 6 dimensions au lieu de la checklist détaillée), écran
+  Résultats à deux niveaux ("En 30 secondes" + "Voir l'analyse complète"),
+  rendu Win Score / Buying Committee, libellés français, réglage "Nom du
+  commercial" dans Settings. Toute fonction de rendu tolère l'absence des
+  nouveaux champs (analyses V1).
+- `css/style.css` — additions uniquement (interlocuteurs, bloc repliable,
+  antisèche Discovery, panneau "En 30 secondes", badges Win Score, cartes
+  Buying Committee) ; rien retiré.
+- `sw.js` — `CACHE_VERSION` passé à `probe-cache-v2`.
+- `index.html` — libellés de navigation en français.
+- `js/methodology-default.js`, `js/db.js` — **non modifiés**.
+
+### Évolution du schéma JSON
+
+Deux structures ajoutées, toutes deux optionnelles pour rester compatibles :
+
+- `buying_committee: [{ name, job_title, declared_role, inferred_role, role_confidence, evidence, influence_level, attitude_to_colorz, notes }]`
+- `win_assessment: { score, confidence, label, deal_strength, colorz_position, political_position, process_control, win_drivers, loss_risks, how_to_win }`
+
+### Stratégie de compatibilité avec les anciennes analyses
+
+- `ProbeSchema.REQUIRED_TOP_LEVEL_KEYS` reste inchangé — une analyse V1 sans
+  `win_assessment` ni `buying_committee` est toujours **valide** à l'import.
+- Chaque fonction de rendu concernée (`renderPanel30s`, `renderWinFactors`,
+  `renderLossRisksCondensed`, `renderWinScoreDetail`, `renderBuyingCommittee`)
+  vérifie explicitement la présence de la donnée et affiche un message de
+  repli ("Win Score non disponible pour cette analyse", "Aucun interlocuteur
+  qualifié dans cette analyse") plutôt que de planter ou d'afficher
+  `undefined`.
+- Le contexte interne (`analysis.context`) est passé de `prospect` /
+  `contacts` / `contactRoles` à `company` / `interlocutors[]` — mais ce
+  contexte n'est utilisé que pour régénérer un prompt, jamais pour l'affichage
+  des résultats déjà importés, donc aucune migration de données n'est
+  nécessaire pour les analyses existantes.
+- Un éventuel brouillon "New Discovery" en cours au moment de la mise à jour
+  (ancien format) est migré à la volée par `migrateDraft()` plutôt que perdu.
+
+### Modifications IndexedDB
+
+Aucune. Mêmes stores, même version (`probe-db`, `DB_VERSION = 1`). Les
+nouvelles clés vivent dans le même champ `result` (JSON libre) que le reste
+de l'analyse — pas de nouvel object store ni de migration de schéma requise.
+
+### Nouvelle version du cache / service worker
+
+`CACHE_VERSION` passé de `probe-cache-v1` à `probe-cache-v2` dans `sw.js` :
+à la prochaine visite, les utilisateurs ayant déjà installé Probe récupèrent
+automatiquement les nouveaux fichiers (l'ancien cache est purgé à
+l'activation). Le service worker ne touche toujours jamais à IndexedDB.
+
+### Tests réalisés
+
+`test_core.js` (logique pure) et `test_e2e.js` (parcours complet en jsdom)
+couvrent notamment :
+
+1. **Régression V1** : une analyse pré-existante, seedée directement dans
+   IndexedDB *avant* le boot de l'app dans le format V1 exact (sans
+   `win_assessment` ni `buying_committee`, ancien `context.prospect`),
+   s'ouvre depuis l'historique sans erreur et affiche des messages de repli
+   corrects plutôt que des `undefined`.
+2. **Nouvelle discovery** : création, ajout de plusieurs interlocuteurs
+   (rôle par défaut *Inconnu*, un *Décideur* explicite), blocage de la
+   validation si l'entreprise est vide, bloc "+ Infos commerciales" replié
+   et laissable entièrement vide, transcript injecté, prompt généré sans
+   aucun placeholder et contenant bien `win_assessment` / `buying_committee`
+   / les interlocuteurs déclarés.
+3. **Import + Win Score** : JSON simulé avec `win_assessment` et
+   `buying_committee` (dont un rôle déclaré différent du rôle inféré par
+   l'IA, rendu explicitement comme "Champion potentiel — à confirmer") ;
+   panneau "En 30 secondes", Opportunity Radar en libellés français (À
+   POUSSER / NON PRIORITAIRE...), blocs "Ce qui peut faire gagner",
+   "Risques de perte", "Ce qu'il manque", Next Steps, puis "Voir l'analyse
+   complète" révélant Buying Committee et Win Score détaillé (4 familles +
+   drivers + risks + how-to-win).
+4. **Réglages** : nom du commercial persisté et repris sur une nouvelle
+   discovery.
+5. **Persistance** : rechargement complet de l'app (nouvelle instance
+   jsdom sur la même base fake-indexeddb) — les deux analyses (V1 seedée +
+   V1.1 nouvellement importée) sont toujours présentes.
+6. **Aucun appel réseau** : vérification statique (`fetch(`, `XMLHttpRequest`,
+   URL `http://`/`https://`) absente de `js/app.js`.
+
+41 assertions passent (`node test_core.js && node test_e2e.js`).
 
 ---
 
